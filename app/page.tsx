@@ -10,6 +10,7 @@ import { ATSScoreCard } from "@/components/ATSScoreCard";
 import { JobTarget } from "@/components/JobTarget";
 import { Results } from "@/components/Results";
 import { HistoryDrawer } from "@/components/HistoryDrawer";
+import { ResumeSwitcher } from "@/components/ResumeSwitcher";
 import { FixQuestionsModal } from "@/components/FixQuestionsModal";
 import { ToastProvider, useToast } from "@/components/Toast";
 import { Button, Card, TopProgress } from "@/components/ui";
@@ -107,6 +108,10 @@ function AppInner() {
     })();
   }, []);
 
+  const refreshDrafts = useCallback(async () => {
+    setDrafts(await listDrafts());
+  }, []);
+
   // ---- Persist the current draft ----
   const persistDraft = useCallback(
     (r: MasterResume, rep: ATSReport | null) => {
@@ -119,9 +124,10 @@ function AppInner() {
         resume: r,
         report: rep,
       };
-      void saveDraft(draft);
+      // Persist, then refresh the inline switcher (name/score may have changed).
+      void saveDraft(draft).then(refreshDrafts);
     },
-    [currentDraftId],
+    [currentDraftId, refreshDrafts],
   );
 
   // ---- ATS scoring ----
@@ -278,8 +284,9 @@ function AppInner() {
           resume: parsed,
           report: null,
         });
+        void refreshDrafts();
         void scoreResume(parsed);
-        toast("Résumé parsed.", { tone: "success" });
+        toast("Résumé parsed and saved.", { tone: "success" });
       } catch (e) {
         const err = e as { error?: string; hint?: string };
         setPhase("idle");
@@ -289,11 +296,13 @@ function AppInner() {
         });
       }
     },
-    [scoreResume, toast],
+    [scoreResume, toast, refreshDrafts],
   );
 
   // ---- Start a new résumé (current draft stays saved in History) ----
   const handleReplace = useCallback(() => {
+    // Flush any pending edits to the outgoing draft before clearing.
+    if (resume && currentDraftId) persistDraft(resume, report);
     setCurrentDraftId(null);
     draftCreatedAtRef.current = 0;
     lastScoredRef.current = "";
@@ -307,7 +316,7 @@ function AppInner() {
       () => uploadRef.current?.scrollIntoView({ behavior: "smooth" }),
       50,
     );
-  }, []);
+  }, [resume, currentDraftId, report, persistDraft]);
 
   // ---- Extract job ----
   const handleExtract = useCallback(
@@ -434,22 +443,31 @@ function AppInner() {
   }, []);
 
   // ---- Open / delete a saved résumé draft ----
-  const handleOpenDraft = useCallback((draft: ResumeDraft) => {
-    setCurrentDraftId(draft.id);
-    draftCreatedAtRef.current = draft.createdAt;
-    lastScoredRef.current = JSON.stringify(draft.resume); // skip auto-rescore on open
-    setResume(draft.resume);
-    setReport(draft.report);
-    setJob(null);
-    setPkg(null);
-    setPartial("");
-    setPhase("ready");
-    setHistoryOpen(false);
-    setTimeout(
-      () => uploadRef.current?.scrollIntoView({ behavior: "smooth" }),
-      120,
-    );
-  }, []);
+  const handleOpenDraft = useCallback(
+    (draft: ResumeDraft) => {
+      if (draft.id === currentDraftId) {
+        setHistoryOpen(false);
+        return;
+      }
+      // Flush pending edits to the outgoing draft before switching.
+      if (resume && currentDraftId) persistDraft(resume, report);
+      setCurrentDraftId(draft.id);
+      draftCreatedAtRef.current = draft.createdAt;
+      lastScoredRef.current = JSON.stringify(draft.resume); // skip auto-rescore on open
+      setResume(draft.resume);
+      setReport(draft.report);
+      setJob(null);
+      setPkg(null);
+      setPartial("");
+      setPhase("ready");
+      setHistoryOpen(false);
+      setTimeout(
+        () => uploadRef.current?.scrollIntoView({ behavior: "smooth" }),
+        120,
+      );
+    },
+    [resume, report, currentDraftId, persistDraft],
+  );
 
   const handleDeleteDraft = useCallback(
     async (id: string) => {
@@ -534,28 +552,31 @@ function AppInner() {
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-[1.7fr_1fr] gap-6 items-start">
               <Card className="p-6 sm:p-7">
-                <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center justify-between mb-4">
                   <div>
                     <p className="eyebrow !mb-0">Master résumé</p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <AnimatePresence>
-                      {savedPill && (
-                        <motion.span
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.2, ease: EASE }}
-                          className="inline-flex items-center gap-1 text-xs text-success"
-                        >
-                          <CheckIcon width={13} height={13} /> Saved
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                    <Button variant="subtle" size="sm" onClick={handleReplace}>
-                      New résumé
-                    </Button>
-                  </div>
+                  <AnimatePresence>
+                    {savedPill && (
+                      <motion.span
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2, ease: EASE }}
+                        className="inline-flex items-center gap-1 text-xs text-success"
+                      >
+                        <CheckIcon width={13} height={13} /> Saved
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </div>
+                <div className="mb-5 pb-5 border-b border-line">
+                  <ResumeSwitcher
+                    drafts={drafts}
+                    currentId={currentDraftId}
+                    onSwitch={handleOpenDraft}
+                    onNew={handleReplace}
+                  />
                 </div>
                 <MasterResumeEditor resume={resume} onChange={setResume} />
               </Card>
