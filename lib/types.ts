@@ -73,6 +73,22 @@ export type ATSReport = {
 
 export type ColdEmail = { subject: string; body: string };
 
+// A question the fixer needs answered before it can apply a fact-dependent fix.
+export type FixQuestion = {
+  id: string;
+  question: string;
+  // Optional hint about what kind of answer is expected.
+  placeholder?: string;
+};
+
+export type FixAnswer = { id: string; question: string; answer: string };
+
+export type ApplyFixesResult = {
+  updatedResume: MasterResume;
+  applied: string[];
+  questions: FixQuestion[];
+};
+
 export type ApplicationPackage = {
   id: string;
   createdAt: number;

@@ -10,6 +10,7 @@ import { ATSScoreCard } from "@/components/ATSScoreCard";
 import { JobTarget } from "@/components/JobTarget";
 import { Results } from "@/components/Results";
 import { HistoryDrawer } from "@/components/HistoryDrawer";
+import { FixQuestionsModal } from "@/components/FixQuestionsModal";
 import { ToastProvider, useToast } from "@/components/Toast";
 import { Button, Card, TopProgress } from "@/components/ui";
 import { CheckIcon } from "@/components/icons";
@@ -28,7 +29,10 @@ import { makeId } from "@/lib/utils";
 import type {
   AppPhase,
   ApplicationPackage,
+  ApplyFixesResult,
   ATSReport,
+  FixAnswer,
+  FixQuestion,
   GeneratedPackage,
   JobPosting,
   MasterResume,
@@ -57,6 +61,13 @@ function AppInner() {
   const [report, setReport] = useState<ATSReport | null>(null);
   const [atsLoading, setAtsLoading] = useState(false);
   const [savedPill, setSavedPill] = useState(false);
+
+  // Apply-fixes flow
+  const [applyingFixes, setApplyingFixes] = useState(false);
+  const [fixModalOpen, setFixModalOpen] = useState(false);
+  const [fixQuestions, setFixQuestions] = useState<FixQuestion[]>([]);
+  const [fixAppliedCount, setFixAppliedCount] = useState(0);
+  const [submittingAnswers, setSubmittingAnswers] = useState(false);
 
   const [job, setJob] = useState<JobPosting | null>(null);
   const [extracting, setExtracting] = useState(false);
@@ -122,6 +133,86 @@ function AppInner() {
       }
     },
     [toast],
+  );
+
+  // ---- Apply fixes (auto-apply + ask) ----
+  const handleApplyFixes = useCallback(async () => {
+    if (!resume || !report || report.fixes.length === 0) return;
+    setApplyingFixes(true);
+    try {
+      const res = await fetch("/api/apply-fixes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume, fixes: report.fixes }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw data;
+      const result = data as ApplyFixesResult;
+      // Apply the auto-fixed résumé immediately (triggers autosave + rescore).
+      setResume(result.updatedResume);
+      setFixAppliedCount(result.applied.length);
+      if (result.questions.length > 0) {
+        setFixQuestions(result.questions);
+        setFixModalOpen(true);
+      } else {
+        toast(
+          `Applied ${result.applied.length} fix${result.applied.length === 1 ? "" : "es"}.`,
+          { hint: "Re-scoring your résumé…", tone: "success" },
+        );
+      }
+    } catch (e) {
+      const err = e as { error?: string; hint?: string };
+      toast(err?.error ?? "Couldn't apply fixes.", {
+        hint: err?.hint ?? "Please try again.",
+        tone: "error",
+      });
+    } finally {
+      setApplyingFixes(false);
+    }
+  }, [resume, report, toast]);
+
+  const handleSubmitAnswers = useCallback(
+    async (answers: FixAnswer[]) => {
+      const filled = answers.filter((a) => a.answer.trim().length > 0);
+      // Nothing answered — the auto-fixes are already applied; just close.
+      if (filled.length === 0) {
+        setFixModalOpen(false);
+        toast(
+          `Applied ${fixAppliedCount} fix${fixAppliedCount === 1 ? "" : "es"}.`,
+          { hint: "Re-scoring your résumé…", tone: "success" },
+        );
+        return;
+      }
+      setSubmittingAnswers(true);
+      try {
+        const res = await fetch("/api/apply-fixes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resume,
+            answers: filled.map((a) => ({ question: a.question, answer: a.answer })),
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw data;
+        const result = data as ApplyFixesResult;
+        setResume(result.updatedResume);
+        setFixModalOpen(false);
+        toast("Applied your details.", {
+          hint: "Re-scoring your résumé…",
+          tone: "success",
+        });
+      } catch (e) {
+        const err = e as { error?: string; hint?: string };
+        toast(err?.error ?? "Couldn't apply your answers.", {
+          hint: err?.hint ?? "Please try again.",
+          tone: "error",
+        });
+      } finally {
+        setSubmittingAnswers(false);
+      }
+    },
+    [resume, fixAppliedCount, toast],
   );
 
   // ---- Autosave + debounced re-score on edit ----
@@ -398,7 +489,12 @@ function AppInner() {
               </Card>
 
               <div className="lg:sticky lg:top-6">
-                <ATSScoreCard report={report} loading={atsLoading} />
+                <ATSScoreCard
+                  report={report}
+                  loading={atsLoading}
+                  applying={applyingFixes}
+                  onApplyFixes={handleApplyFixes}
+                />
               </div>
             </div>
           )}
@@ -443,6 +539,15 @@ function AppInner() {
         onClose={() => setHistoryOpen(false)}
         onOpenItem={handleOpenItem}
         onDelete={handleDeleteItem}
+      />
+
+      <FixQuestionsModal
+        open={fixModalOpen}
+        questions={fixQuestions}
+        appliedCount={fixAppliedCount}
+        submitting={submittingAnswers}
+        onSubmit={handleSubmitAnswers}
+        onClose={() => setFixModalOpen(false)}
       />
     </main>
   );

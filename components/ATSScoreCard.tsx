@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Card, Skeleton } from "./ui";
+import { Card, Skeleton, Button } from "./ui";
 import { ScoreRing } from "./ScoreRing";
-import { CheckIcon } from "./icons";
+import { CheckIcon, SparkIcon } from "./icons";
 import { EASE } from "./motion";
 import type { ATSReport } from "@/lib/types";
 
@@ -39,9 +39,13 @@ function Bar({ label, value }: { label: string; value: number }) {
 export function ATSScoreCard({
   report,
   loading,
+  applying = false,
+  onApplyFixes,
 }: {
   report: ATSReport | null;
   loading: boolean;
+  applying?: boolean;
+  onApplyFixes?: () => void;
 }) {
   const [ticked, setTicked] = useState<Set<number>>(new Set());
 
@@ -79,9 +83,22 @@ export function ATSScoreCard({
 
           {report.fixes.length > 0 && (
             <div className="mt-6 pt-5 border-t border-line">
-              <p className="text-[11px] uppercase tracking-wider text-ink-soft font-semibold mb-3">
-                Suggested fixes
-              </p>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <p className="text-[11px] uppercase tracking-wider text-ink-soft font-semibold">
+                  Suggested fixes
+                </p>
+                {onApplyFixes && (
+                  <Button
+                    size="sm"
+                    onClick={onApplyFixes}
+                    disabled={applying}
+                    aria-label="Apply suggested fixes automatically"
+                  >
+                    <SparkIcon width={15} height={15} />
+                    {applying ? "Applying…" : "Apply fixes"}
+                  </Button>
+                )}
+              </div>
               <ul className="space-y-2">
                 {report.fixes.map((fix, i) => {
                   const done = ticked.has(i);

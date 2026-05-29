@@ -238,3 +238,82 @@ export function generateUserContent(
     `JOB POSTING:\n${JSON.stringify(jobPosting, null, 2)}`
   );
 }
+
+// ---------- Apply ATS fixes (auto-apply + ask) ----------
+
+export const APPLY_FIXES_SYSTEM =
+  "You are a precise résumé editor. You are given a MASTER RESUME and a list of ATS " +
+  "auditor FIXES. Apply every fix you can WITHOUT inventing any facts.\n\n" +
+  "You MAY, on your own: reorganize or merge sections, remove redundant sections " +
+  "(e.g. a trailing KEYWORDS list), use standard section names, rewrite vague or weak " +
+  "wording into clearer, stronger, more specific phrasing, tighten bullets, integrate " +
+  "keywords that are ALREADY present elsewhere in the résumé, and fix structure/ordering.\n\n" +
+  "TRUTHFULNESS IS ABSOLUTE: never invent or guess metrics, numbers, percentages, dates, " +
+  "employers, titles, certifications, or skills. If a fix requires factual information that " +
+  "is NOT already in the résumé (e.g. 'quantify X', 'add an end date to role Y', 'add " +
+  "subscriber count'), DO NOT fabricate it. Instead, emit a clear, specific QUESTION asking " +
+  "the user for exactly that information. Group related missing facts into a single question " +
+  "where natural. Each question must be self-contained and concrete.\n\n" +
+  "Return via the `emit_fixes` tool: `updatedResume` (the résumé with all auto-applicable " +
+  "fixes applied), `applied` (short descriptions of the fixes you applied), and `questions` " +
+  "(the information you still need from the user). If everything could be applied, return an " +
+  "empty `questions` array.";
+
+export const APPLY_ANSWERS_SYSTEM =
+  "You are a precise résumé editor. You previously asked the user for specific information. " +
+  "Below is the RESUME and the user's ANSWERS. Incorporate each answer truthfully into the " +
+  "résumé exactly where it belongs (e.g. add the metric to the right bullet, the date to the " +
+  "right role). Use ONLY the information the user provided — do not invent or extrapolate " +
+  "beyond it. If an answer is blank or 'skip', leave that part unchanged. Return the final " +
+  "résumé via the `emit_fixes` tool with `applied` describing what you incorporated and an " +
+  "empty `questions` array.";
+
+export const APPLY_FIXES_TOOL: Tool = {
+  name: "emit_fixes",
+  description: "Emit the updated résumé plus applied fixes and any questions for the user.",
+  input_schema: {
+    type: "object",
+    properties: {
+      updatedResume: masterResumeSchema,
+      applied: {
+        type: "array",
+        items: { type: "string" },
+        description: "Short descriptions of fixes applied automatically.",
+      },
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Stable kebab-case id." },
+            question: { type: "string" },
+            placeholder: {
+              type: "string",
+              description: "Optional example of the kind of answer expected.",
+            },
+          },
+          required: ["id", "question"],
+        },
+        description: "Information needed from the user before fact-dependent fixes can apply.",
+      },
+    },
+    required: ["updatedResume", "applied", "questions"],
+  } as unknown as Tool["input_schema"],
+};
+
+export function applyFixesUserContent(resume: unknown, fixes: string[]): string {
+  return (
+    `MASTER RESUME:\n${JSON.stringify(resume, null, 2)}\n\n` +
+    `FIXES TO APPLY:\n${fixes.map((f, i) => `${i + 1}. ${f}`).join("\n")}`
+  );
+}
+
+export function applyAnswersUserContent(
+  resume: unknown,
+  answers: { question: string; answer: string }[],
+): string {
+  const qa = answers
+    .map((a, i) => `${i + 1}. Q: ${a.question}\n   A: ${a.answer || "(skip)"}`)
+    .join("\n");
+  return `RESUME:\n${JSON.stringify(resume, null, 2)}\n\nANSWERS:\n${qa}`;
+}
