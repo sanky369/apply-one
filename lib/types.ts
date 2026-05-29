@@ -99,6 +99,17 @@ export type ApplicationPackage = {
   match: MatchScore;
 };
 
+// A saved master-résumé working session, listed in History so the front page
+// can always start fresh while past work stays reachable.
+export type ResumeDraft = {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  name: string;
+  resume: MasterResume;
+  report: ATSReport | null;
+};
+
 // The app-wide state machine (plan §4).
 export type AppPhase =
   | "idle"

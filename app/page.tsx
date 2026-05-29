@@ -16,11 +16,9 @@ import { Button, Card, TopProgress } from "@/components/ui";
 import { CheckIcon } from "@/components/icons";
 import { sectionReveal, VIEWPORT, EASE } from "@/components/motion";
 import {
-  loadMaster,
-  saveMaster,
-  clearMaster,
-  loadReport,
-  saveReport,
+  saveDraft,
+  listDrafts,
+  deleteDraft,
   listHistory,
   saveToHistory,
   deleteHistory,
@@ -36,6 +34,7 @@ import type {
   GeneratedPackage,
   JobPosting,
   MasterResume,
+  ResumeDraft,
 } from "@/lib/types";
 
 function Reveal({ children, id }: { children: React.ReactNode; id?: string }) {
@@ -80,25 +79,25 @@ function AppInner() {
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<ApplicationPackage[]>([]);
+  const [drafts, setDrafts] = useState<ResumeDraft[]>([]);
+
+  // The résumé draft currently being edited (null = fresh / nothing open).
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(null);
+  const draftCreatedAtRef = useRef<number>(0);
+  // JSON of the résumé as last scored — lets us skip rescoring on open/no-op.
+  const lastScoredRef = useRef<string>("");
 
   const uploadRef = useRef<HTMLDivElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const hydrated = useRef(false);
 
   // ---- Hydrate from IndexedDB on mount ----
+  // The front page always starts fresh; past work lives in History.
   useEffect(() => {
     (async () => {
       try {
-        const [m, r, h] = await Promise.all([
-          loadMaster(),
-          loadReport(),
-          listHistory(),
-        ]);
-        if (m) {
-          setResume(m);
-          setReport(r);
-          setPhase("ready");
-        }
+        const [d, h] = await Promise.all([listDrafts(), listHistory()]);
+        setDrafts(d);
         setHistory(h);
       } catch {
         /* fresh browser */
@@ -107,6 +106,23 @@ function AppInner() {
       }
     })();
   }, []);
+
+  // ---- Persist the current draft ----
+  const persistDraft = useCallback(
+    (r: MasterResume, rep: ATSReport | null) => {
+      if (!currentDraftId) return;
+      const draft: ResumeDraft = {
+        id: currentDraftId,
+        createdAt: draftCreatedAtRef.current || Date.now(),
+        updatedAt: Date.now(),
+        name: r.contact.name || "Untitled résumé",
+        resume: r,
+        report: rep,
+      };
+      void saveDraft(draft);
+    },
+    [currentDraftId],
+  );
 
   // ---- ATS scoring ----
   const scoreResume = useCallback(
@@ -120,8 +136,10 @@ function AppInner() {
         });
         const data = await res.json();
         if (!res.ok) throw data;
-        setReport(data as ATSReport);
-        void saveReport(data as ATSReport);
+        const rep = data as ATSReport;
+        setReport(rep);
+        lastScoredRef.current = JSON.stringify(r);
+        persistDraft(r, rep);
       } catch (e) {
         const err = e as { hint?: string };
         toast("Couldn't score résumé.", {
@@ -132,7 +150,7 @@ function AppInner() {
         setAtsLoading(false);
       }
     },
-    [toast],
+    [toast, persistDraft],
   );
 
   // ---- Apply fixes (auto-apply + ask) ----
@@ -215,18 +233,21 @@ function AppInner() {
     [resume, fixAppliedCount, toast],
   );
 
-  // ---- Autosave + debounced re-score on edit ----
+  // ---- Autosave the draft + debounced re-score on edit ----
   useEffect(() => {
-    if (!hydrated.current || !resume) return;
+    if (!hydrated.current || !resume || !currentDraftId) return;
     const t = setTimeout(() => {
-      void saveMaster(resume);
+      persistDraft(resume, report);
       setSavedPill(true);
       setTimeout(() => setSavedPill(false), 1800);
-      void scoreResume(resume);
+      // Only re-score when the résumé actually changed since the last score.
+      if (JSON.stringify(resume) !== lastScoredRef.current) {
+        void scoreResume(resume);
+      }
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume]);
+  }, [resume, currentDraftId]);
 
   // ---- Parse uploaded PDF ----
   const handleFile = useCallback(
@@ -241,9 +262,22 @@ function AppInner() {
         const data = await res.json();
         if (!res.ok) throw data;
         const parsed = data as MasterResume;
+        // Start a brand-new draft for this upload.
+        const id = makeId();
+        draftCreatedAtRef.current = Date.now();
+        setCurrentDraftId(id);
+        lastScoredRef.current = ""; // force a fresh score
+        setReport(null);
         setResume(parsed);
         setPhase("ready");
-        await saveMaster(parsed);
+        await saveDraft({
+          id,
+          createdAt: draftCreatedAtRef.current,
+          updatedAt: draftCreatedAtRef.current,
+          name: parsed.contact.name || "Untitled résumé",
+          resume: parsed,
+          report: null,
+        });
         void scoreResume(parsed);
         toast("Résumé parsed.", { tone: "success" });
       } catch (e) {
@@ -258,9 +292,11 @@ function AppInner() {
     [scoreResume, toast],
   );
 
-  // ---- Replace / start over ----
-  const handleReplace = useCallback(async () => {
-    await clearMaster();
+  // ---- Start a new résumé (current draft stays saved in History) ----
+  const handleReplace = useCallback(() => {
+    setCurrentDraftId(null);
+    draftCreatedAtRef.current = 0;
+    lastScoredRef.current = "";
     setResume(null);
     setReport(null);
     setJob(null);
@@ -391,9 +427,45 @@ function AppInner() {
   }, [pkg, job, toast]);
 
   const handleOpenHistory = useCallback(async () => {
-    setHistory(await listHistory());
+    const [h, d] = await Promise.all([listHistory(), listDrafts()]);
+    setHistory(h);
+    setDrafts(d);
     setHistoryOpen(true);
   }, []);
+
+  // ---- Open / delete a saved résumé draft ----
+  const handleOpenDraft = useCallback((draft: ResumeDraft) => {
+    setCurrentDraftId(draft.id);
+    draftCreatedAtRef.current = draft.createdAt;
+    lastScoredRef.current = JSON.stringify(draft.resume); // skip auto-rescore on open
+    setResume(draft.resume);
+    setReport(draft.report);
+    setJob(null);
+    setPkg(null);
+    setPartial("");
+    setPhase("ready");
+    setHistoryOpen(false);
+    setTimeout(
+      () => uploadRef.current?.scrollIntoView({ behavior: "smooth" }),
+      120,
+    );
+  }, []);
+
+  const handleDeleteDraft = useCallback(
+    async (id: string) => {
+      await deleteDraft(id);
+      setDrafts(await listDrafts());
+      // If we deleted the open draft, reset to a fresh start.
+      if (id === currentDraftId) {
+        setCurrentDraftId(null);
+        draftCreatedAtRef.current = 0;
+        setResume(null);
+        setReport(null);
+        setPhase("idle");
+      }
+    },
+    [currentDraftId],
+  );
 
   const handleOpenItem = useCallback((item: ApplicationPackage) => {
     setJob(item.job);
@@ -481,7 +553,7 @@ function AppInner() {
                       )}
                     </AnimatePresence>
                     <Button variant="subtle" size="sm" onClick={handleReplace}>
-                      Replace
+                      New résumé
                     </Button>
                   </div>
                 </div>
@@ -536,9 +608,12 @@ function AppInner() {
       <HistoryDrawer
         open={historyOpen}
         items={history}
+        drafts={drafts}
         onClose={() => setHistoryOpen(false)}
         onOpenItem={handleOpenItem}
         onDelete={handleDeleteItem}
+        onOpenDraft={handleOpenDraft}
+        onDeleteDraft={handleDeleteDraft}
       />
 
       <FixQuestionsModal

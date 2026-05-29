@@ -1,11 +1,21 @@
-// IndexedDB persistence (client-only). Master resume, settings, and history.
+// IndexedDB persistence (client-only). Résumé drafts, settings, and application history.
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { ApplicationPackage, ATSReport, MasterResume } from "./types";
+import type {
+  ApplicationPackage,
+  ATSReport,
+  MasterResume,
+  ResumeDraft,
+} from "./types";
 
 interface ApplyOneDB extends DBSchema {
   meta: {
     key: string;
     value: unknown;
+  };
+  drafts: {
+    key: string;
+    value: ResumeDraft;
+    indexes: { byUpdatedAt: number };
   };
   history: {
     key: string;
@@ -15,10 +25,11 @@ interface ApplyOneDB extends DBSchema {
 }
 
 const DB_NAME = "applyone";
-const DB_VERSION = 1;
-const MASTER_KEY = "masterResume";
+const DB_VERSION = 2;
 const SETTINGS_KEY = "settings";
-const REPORT_KEY = "atsReport";
+// Legacy single-master keys (v1) — read once during migration.
+const LEGACY_MASTER_KEY = "masterResume";
+const LEGACY_REPORT_KEY = "atsReport";
 
 export type Settings = {
   theme: "light" | "dark";
@@ -32,7 +43,7 @@ function getDB(): Promise<IDBPDatabase<ApplyOneDB>> {
   }
   if (!dbPromise) {
     dbPromise = openDB<ApplyOneDB>(DB_NAME, DB_VERSION, {
-      upgrade(db) {
+      async upgrade(db, oldVersion, _newVersion, tx) {
         if (!db.objectStoreNames.contains("meta")) {
           db.createObjectStore("meta");
         }
@@ -40,40 +51,43 @@ function getDB(): Promise<IDBPDatabase<ApplyOneDB>> {
           const store = db.createObjectStore("history", { keyPath: "id" });
           store.createIndex("byCreatedAt", "createdAt");
         }
+        if (!db.objectStoreNames.contains("drafts")) {
+          const store = db.createObjectStore("drafts", { keyPath: "id" });
+          store.createIndex("byUpdatedAt", "updatedAt");
+        }
+
+        // v1 → v2: migrate the single saved master résumé into a draft so it
+        // remains reachable from History instead of auto-loading on the page.
+        if (oldVersion === 1) {
+          try {
+            const meta = tx.objectStore("meta");
+            const master = (await meta.get(LEGACY_MASTER_KEY)) as
+              | MasterResume
+              | undefined;
+            if (master) {
+              const report =
+                ((await meta.get(LEGACY_REPORT_KEY)) as ATSReport | undefined) ??
+                null;
+              const now = Date.now();
+              await tx.objectStore("drafts").put({
+                id: `migrated-${now}`,
+                createdAt: now,
+                updatedAt: now,
+                name: master.contact?.name || "Imported résumé",
+                resume: master,
+                report,
+              });
+              await meta.delete(LEGACY_MASTER_KEY);
+              await meta.delete(LEGACY_REPORT_KEY);
+            }
+          } catch {
+            /* migration best-effort */
+          }
+        }
       },
     });
   }
   return dbPromise;
-}
-
-// ---------- Master resume ----------
-
-export async function saveMaster(resume: MasterResume): Promise<void> {
-  const db = await getDB();
-  await db.put("meta", resume, MASTER_KEY);
-}
-
-export async function loadMaster(): Promise<MasterResume | null> {
-  const db = await getDB();
-  return ((await db.get("meta", MASTER_KEY)) as MasterResume) ?? null;
-}
-
-export async function clearMaster(): Promise<void> {
-  const db = await getDB();
-  await db.delete("meta", MASTER_KEY);
-  await db.delete("meta", REPORT_KEY);
-}
-
-// ---------- Cached ATS report ----------
-
-export async function saveReport(report: ATSReport): Promise<void> {
-  const db = await getDB();
-  await db.put("meta", report, REPORT_KEY);
-}
-
-export async function loadReport(): Promise<ATSReport | null> {
-  const db = await getDB();
-  return ((await db.get("meta", REPORT_KEY)) as ATSReport) ?? null;
 }
 
 // ---------- Settings ----------
@@ -88,7 +102,30 @@ export async function loadSettings(): Promise<Settings | null> {
   return ((await db.get("meta", SETTINGS_KEY)) as Settings) ?? null;
 }
 
-// ---------- History ----------
+// ---------- Résumé drafts ----------
+
+export async function saveDraft(draft: ResumeDraft): Promise<void> {
+  const db = await getDB();
+  await db.put("drafts", draft);
+}
+
+export async function loadDraft(id: string): Promise<ResumeDraft | null> {
+  const db = await getDB();
+  return (await db.get("drafts", id)) ?? null;
+}
+
+export async function listDrafts(): Promise<ResumeDraft[]> {
+  const db = await getDB();
+  const all = await db.getAllFromIndex("drafts", "byUpdatedAt");
+  return all.reverse(); // most recently edited first
+}
+
+export async function deleteDraft(id: string): Promise<void> {
+  const db = await getDB();
+  await db.delete("drafts", id);
+}
+
+// ---------- Application history ----------
 
 export async function saveToHistory(pkg: ApplicationPackage): Promise<void> {
   const db = await getDB();

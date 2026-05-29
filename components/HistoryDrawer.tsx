@@ -2,24 +2,31 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import { IconButton, Button, Chip } from "./ui";
-import { XIcon, TrashIcon, ClockIcon } from "./icons";
+import { XIcon, TrashIcon, ClockIcon, FileIcon } from "./icons";
 import { drawerSpring, EASE } from "./motion";
 import { formatDate } from "@/lib/utils";
-import type { ApplicationPackage } from "@/lib/types";
+import type { ApplicationPackage, ResumeDraft } from "@/lib/types";
 
 export function HistoryDrawer({
   open,
   items,
+  drafts,
   onClose,
   onOpenItem,
   onDelete,
+  onOpenDraft,
+  onDeleteDraft,
 }: {
   open: boolean;
   items: ApplicationPackage[];
+  drafts: ResumeDraft[];
   onClose: () => void;
   onOpenItem: (pkg: ApplicationPackage) => void;
   onDelete: (id: string) => void;
+  onOpenDraft: (draft: ResumeDraft) => void;
+  onDeleteDraft: (id: string) => void;
 }) {
+  const empty = items.length === 0 && drafts.length === 0;
   return (
     <AnimatePresence>
       {open && (
@@ -52,21 +59,81 @@ export function HistoryDrawer({
               </IconButton>
             </div>
 
-            <div className="flex-1 overflow-y-auto scroll-thin px-5 py-4">
-              {items.length === 0 ? (
+            <div className="flex-1 overflow-y-auto scroll-thin px-5 py-4 space-y-6">
+              {empty ? (
                 <div className="text-center py-16 text-ink-soft">
                   <ClockIcon
                     width={28}
                     height={28}
                     className="mx-auto mb-3 opacity-50"
                   />
-                  <p className="text-sm">No saved applications yet.</p>
+                  <p className="text-sm">Nothing saved yet.</p>
                   <p className="text-xs mt-1 opacity-80">
-                    Generate a package and tap “Save to history”.
+                    Upload a résumé or generate a package — they&apos;ll show up here.
                   </p>
                 </div>
-              ) : (
-                <ul className="space-y-3">
+              ) : null}
+
+              {drafts.length > 0 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-soft font-semibold mb-3">
+                    Your résumés
+                  </p>
+                  <ul className="space-y-3">
+                    <AnimatePresence initial={false}>
+                      {drafts.map((d) => (
+                        <motion.li
+                          key={d.id}
+                          layout
+                          initial={{ opacity: 0, y: 8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, x: 40 }}
+                          transition={{ duration: 0.25, ease: EASE }}
+                          className="rounded-xl border border-line p-4"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-2 min-w-0">
+                              <FileIcon
+                                width={16}
+                                height={16}
+                                className="text-accent mt-0.5 shrink-0"
+                              />
+                              <div className="min-w-0">
+                                <p className="font-medium text-sm truncate">
+                                  {d.name || "Untitled résumé"}
+                                </p>
+                                <p className="text-[11px] text-ink-soft/80 mt-0.5">
+                                  Edited {formatDate(d.updatedAt)}
+                                </p>
+                              </div>
+                            </div>
+                            {d.report && <Chip tone="accent">{d.report.score}</Chip>}
+                          </div>
+                          <div className="flex items-center gap-2 mt-3">
+                            <Button size="sm" variant="ghost" onClick={() => onOpenDraft(d)}>
+                              Continue
+                            </Button>
+                            <IconButton
+                              onClick={() => onDeleteDraft(d.id)}
+                              aria-label="Delete résumé"
+                              className="h-8 w-8"
+                            >
+                              <TrashIcon width={15} height={15} />
+                            </IconButton>
+                          </div>
+                        </motion.li>
+                      ))}
+                    </AnimatePresence>
+                  </ul>
+                </div>
+              )}
+
+              {items.length > 0 && (
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-ink-soft font-semibold mb-3">
+                    Applications
+                  </p>
+                  <ul className="space-y-3">
                   <AnimatePresence initial={false}>
                     {items.map((pkg) => (
                       <motion.li
@@ -111,7 +178,8 @@ export function HistoryDrawer({
                       </motion.li>
                     ))}
                   </AnimatePresence>
-                </ul>
+                  </ul>
+                </div>
               )}
             </div>
           </motion.aside>
